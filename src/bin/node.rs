@@ -19,6 +19,7 @@ fn create_logger() -> Logger {
 #[tokio::main]
 async fn main() {
     let logger = create_logger();
-    let (mut socket, _) = Socket::outgoing("51.15.220.7:9732".parse().unwrap());
+    let address = std::env::args().nth(1).unwrap();
+    let (mut socket, _) = Socket::outgoing(address.parse().unwrap());
     socket.run(&logger).await.unwrap();
 }

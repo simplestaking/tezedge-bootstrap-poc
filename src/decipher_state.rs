@@ -1,8 +1,5 @@
 use tokio::io::{AsyncWriteExt, AsyncReadExt};
-use tezos_messages::p2p::{
-    binary_message::{BinaryChunk, BinaryMessage},
-    encoding::peer::PeerMessageResponse,
-};
+use tezos_messages::p2p::binary_message::{BinaryChunk, BinaryMessage};
 use tezos_conversation::{Decipher, NonceAddition};
 use super::error::SocketError;
 
@@ -93,27 +90,22 @@ impl DecipherState {
         Ok(())
     }
 
-    // TODO:
-    #[allow(dead_code)]
-    pub async fn read_message<T, M>(&mut self, stream: &mut T) -> Result<M, SocketError>
+    pub async fn read_chunk<T>(&mut self, stream: &mut T) -> Result<Vec<u8>, SocketError>
     where
         T: Unpin + AsyncReadExt,
-        M: BinaryMessage,
     {
-        let _ = stream;
-        unimplemented!()
-    }
+        let mut size_buf = [0; 2];
+        stream
+            .read_exact(size_buf.as_mut())
+            .await
+            .map_err(SocketError::Io)?;
+        let size = u16::from_be_bytes(size_buf) as usize;
+        let mut chunk = [0; 0x10000];
+        stream
+            .read_exact(&mut chunk[..size])
+            .await
+            .map_err(SocketError::Io)?;
 
-    // TODO:
-    #[allow(dead_code)]
-    pub async fn read_peer_response<T>(
-        &mut self,
-        stream: &mut T,
-    ) -> Result<PeerMessageResponse, SocketError>
-    where
-        T: Unpin + AsyncReadExt,
-    {
-        let _ = stream;
-        unimplemented!()
+        self.decrypt(&chunk[..size])
     }
 }
