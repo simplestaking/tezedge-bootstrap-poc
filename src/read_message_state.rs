@@ -55,11 +55,14 @@ where
         let current_state = mem::replace(self, ReadMessageState::Awaiting);
         let new_state = match current_state {
             ReadMessageState::Empty => {
+                let data = decipher.read_chunk(stream).await?;
+                // do no know if it is enough, the new state is Unknown
                 ReadMessageState::Unknown {
-                    buffer: decipher.read_chunk(stream).await?,
+                    buffer: data,
                 }
             },
             ReadMessageState::Unknown { buffer } => {
+                // check if it is enough, the new state is Buffering or HasMessage
                 match M::from_bytes(&buffer) {
                     Ok(message) => ReadMessageState::HasMessage(message),
                     Err(BinaryReaderError::Underflow { bytes }) => {
@@ -72,8 +75,10 @@ where
                 }        
             },
             ReadMessageState::Buffering { remaining, mut buffer } => {
+                // add one more chunk
                 let chunk = decipher.read_chunk(stream).await?;
                 buffer.extend_from_slice(chunk.as_ref());
+                // if buffered what is remaining, move to Unknown, otherwise continue Buffering
                 if chunk.len() >= remaining {
                     ReadMessageState::Unknown { buffer }
                 } else {
