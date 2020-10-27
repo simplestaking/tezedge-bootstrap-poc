@@ -28,15 +28,21 @@ impl<M> ReadMessageState<M>
 where
     M: BinaryMessage + fmt::Debug,
 {
-    #[allow(dead_code)]
     pub fn new() -> Self {
         ReadMessageState::Unknown {
             buffer: Vec::new(),
         }
     }
 
-    #[allow(dead_code)]
-    pub async fn read_message(&mut self, logger: &Logger, stream: &mut TcpStream, decipher: &mut DecipherState) -> Result<Option<M>, SocketError> {
+    pub async fn read_message(&mut self, logger: &Logger, stream: &mut TcpStream, decipher: &mut DecipherState) -> Result<M, SocketError> {
+        loop {
+            if let Some(message) = self.try_read_message(logger, stream, decipher).await? {
+                break Ok(message);
+            }
+        }
+    }
+
+    async fn try_read_message(&mut self, logger: &Logger, stream: &mut TcpStream, decipher: &mut DecipherState) -> Result<Option<M>, SocketError> {
         let current_state = mem::replace(self, ReadMessageState::Empty);
         match current_state {
             ReadMessageState::HasMessage(message) => {

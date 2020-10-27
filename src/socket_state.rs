@@ -4,7 +4,7 @@ use tezos_messages::p2p::encoding::ack::AckMessage;
 use slog::Logger;
 use super::{
     error::SocketError, handshake_state::HandshakeState,
-    bootstrap_state::BootstrapState,
+    bootstrap::BootstrapState,
 };
 
 /// The state of peer communication

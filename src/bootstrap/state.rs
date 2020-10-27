@@ -1,12 +1,12 @@
 use tokio::net::TcpStream;
 use tezos_messages::p2p::encoding::{
-    peer::PeerMessageResponse,
+    peer::{PeerMessageResponse, PeerMessage},
+    current_branch::{CurrentBranchMessage, CurrentBranch},
 };
 use slog::Logger;
 use super::{
-    error::SocketError,
-    decipher_state::DecipherState,
-    read_message_state::ReadMessageState,
+    SocketError, DecipherState, ReadMessageState,
+    genesis,
 };
 
 /// Reference to shared chain state
@@ -16,6 +16,7 @@ pub struct BootstrapState {
     decipher: DecipherState,
 }
 
+#[allow(dead_code)]
 enum InnerState {
     // -> GetCurrentBranch
     // <- GetCurrentBranch
@@ -24,7 +25,9 @@ enum InnerState {
     ExchangeCurrentBranch,
     // -> GetBlockHeaders
     // <- BlockHeader
-    // AskBlockHeaders,
+    AskBlockHeaders,
+    // if peer request CurrentBranch with unknown chain id
+    UnknownChain,
 }
 
 impl BootstrapState {
@@ -37,14 +40,23 @@ impl BootstrapState {
     }
 
     pub async fn run(&mut self, logger: &Logger, stream: &mut TcpStream) -> Result<(), SocketError> {
+
         let &mut BootstrapState { ref mut inner, ref mut reader, ref mut decipher } = self;
         let _ = inner;
 
-        let _message = loop {
-            if let Some(message) = reader.read_message(logger, stream, decipher).await? {
-                break message;
+        let message = reader.read_message(logger, stream, decipher).await?;
+
+        for message in message.messages() {
+            match message {
+                &PeerMessage::GetCurrentBranch(_) => {
+                    let genesis_block_header = genesis::block_header();
+                    let current_branch = CurrentBranch::new(genesis_block_header, Vec::new());
+                    let current_branch_message = CurrentBranchMessage::new(genesis::CHAIN_ID.to_vec(), current_branch);
+                    decipher.write_message::<_, PeerMessageResponse>(stream, &[current_branch_message.into()]).await?;
+                },
+                _ => (),
             }
-        };
+        }
 
         Ok(())
     }
