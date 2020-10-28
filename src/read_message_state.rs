@@ -3,23 +3,15 @@ use tokio::net::TcpStream;
 use slog::Logger;
 use tezos_messages::p2p::binary_message::BinaryMessage;
 use tezos_encoding::binary_reader::BinaryReaderError;
-use super::{
-    error::SocketError,
-    decipher_state::DecipherState,
-};
+use super::{error::SocketError, decipher_state::DecipherState};
 
 pub enum ReadMessageState<M>
 where
     M: BinaryMessage,
 {
     Empty,
-    Unknown {
-        buffer: Vec<u8>,
-    },
-    Buffering {
-        remaining: usize,
-        buffer: Vec<u8>,
-    },
+    Unknown { buffer: Vec<u8> },
+    Buffering { remaining: usize, buffer: Vec<u8> },
     HasMessage(M),
     Awaiting,
 }
@@ -29,12 +21,15 @@ where
     M: BinaryMessage + fmt::Debug,
 {
     pub fn new() -> Self {
-        ReadMessageState::Unknown {
-            buffer: Vec::new(),
-        }
+        ReadMessageState::Unknown { buffer: Vec::new() }
     }
 
-    pub async fn read_message(&mut self, logger: &Logger, stream: &mut TcpStream, decipher: &mut DecipherState) -> Result<M, SocketError> {
+    pub async fn read_message(
+        &mut self,
+        logger: &Logger,
+        stream: &mut TcpStream,
+        decipher: &mut DecipherState,
+    ) -> Result<M, SocketError> {
         loop {
             if let Some(message) = self.try_read_message(logger, stream, decipher).await? {
                 break Ok(message);
@@ -42,45 +37,53 @@ where
         }
     }
 
-    async fn try_read_message(&mut self, logger: &Logger, stream: &mut TcpStream, decipher: &mut DecipherState) -> Result<Option<M>, SocketError> {
+    async fn try_read_message(
+        &mut self,
+        logger: &Logger,
+        stream: &mut TcpStream,
+        decipher: &mut DecipherState,
+    ) -> Result<Option<M>, SocketError> {
         let current_state = mem::replace(self, ReadMessageState::Empty);
         match current_state {
             ReadMessageState::HasMessage(message) => {
-                slog::debug!(logger, "message: {:x?}", message);
+                slog::debug!(logger, "<- {:x?}", message);
                 Ok(Some(message))
             },
             current_state => {
                 let _ = mem::replace(self, current_state);
                 self.run(stream, decipher).await?;
                 Ok(None)
-            }
+            },
         }
     }
 
-    async fn run(&mut self, stream: &mut TcpStream, decipher: &mut DecipherState) -> Result<(), SocketError> {
+    async fn run(
+        &mut self,
+        stream: &mut TcpStream,
+        decipher: &mut DecipherState,
+    ) -> Result<(), SocketError> {
         let current_state = mem::replace(self, ReadMessageState::Awaiting);
         let new_state = match current_state {
             ReadMessageState::Empty => {
                 let data = decipher.read_chunk(stream).await?;
                 // do no know if it is enough, the new state is Unknown
-                ReadMessageState::Unknown {
-                    buffer: data,
-                }
+                ReadMessageState::Unknown { buffer: data }
             },
             ReadMessageState::Unknown { buffer } => {
                 // check if it is enough, the new state is Buffering or HasMessage
                 match M::from_bytes(&buffer) {
                     Ok(message) => ReadMessageState::HasMessage(message),
-                    Err(BinaryReaderError::Underflow { bytes }) => {
-                        ReadMessageState::Buffering {
-                            remaining: bytes,
-                            buffer: buffer,
-                        }
+                    Err(BinaryReaderError::Underflow { bytes }) => ReadMessageState::Buffering {
+                        remaining: bytes,
+                        buffer: buffer,
                     },
-                    Err(_) => return Err(SocketError::DecodingError)
-                }        
+                    Err(_) => return Err(SocketError::DecodingError),
+                }
             },
-            ReadMessageState::Buffering { remaining, mut buffer } => {
+            ReadMessageState::Buffering {
+                remaining,
+                mut buffer,
+            } => {
                 // add one more chunk
                 let chunk = decipher.read_chunk(stream).await?;
                 buffer.extend_from_slice(chunk.as_ref());

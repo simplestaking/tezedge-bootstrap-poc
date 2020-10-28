@@ -1,8 +1,4 @@
-use super::{
-    error::SocketError,
-    decipher_state::DecipherState,
-    read_message_state::ReadMessageState,
-};
+use super::{error::SocketError, trusted_connection::TrustedConnection};
 
 pub type ChainId = [u8; 4];
 

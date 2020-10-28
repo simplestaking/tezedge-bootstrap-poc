@@ -3,7 +3,9 @@ use tokio::net::TcpStream;
 use tezos_messages::p2p::encoding::ack::AckMessage;
 use slog::Logger;
 use super::{
-    error::SocketError, handshake_state::HandshakeState,
+    error::SocketError,
+    handshake_state::HandshakeState,
+    trusted_connection::TrustedConnection,
     bootstrap::{BootstrapState, genesis},
 };
 
@@ -11,7 +13,7 @@ use super::{
 pub enum SocketState {
     Connecting(SocketAddr),
     Handshake(TcpStream, HandshakeState),
-    BootstrapState(TcpStream, BootstrapState),
+    BootstrapState(BootstrapState),
     // TODO: report reason
     Finish,
     Awaiting,
@@ -40,21 +42,22 @@ impl SocketState {
                         match ack {
                             AckMessage::Ack => {
                                 slog::info!(logger, "ready to bootstrap");
-                                let bootstrap = BootstrapState::new(decipher, genesis::CHAIN_ID);
-                                SocketState::BootstrapState(stream, bootstrap)
+                                let connection = TrustedConnection::new(stream, decipher, &logger);
+                                let bootstrap = BootstrapState::new(connection, genesis::CHAIN_ID);
+                                SocketState::BootstrapState(bootstrap)
                             },
                             AckMessage::Nack(info) => {
                                 slog::debug!(logger, "{:?}", info);
                                 SocketState::Finish
-                            }
+                            },
                             AckMessage::NackV0 => SocketState::Finish,
                         }
                     },
                     incomplete => SocketState::Handshake(stream, incomplete),
                 }
             },
-            SocketState::BootstrapState(mut stream, bootstrap) => {
-                bootstrap.run(logger, &mut stream).await?;
+            SocketState::BootstrapState(bootstrap) => {
+                bootstrap.run(logger).await?;
                 SocketState::Finish
             },
             SocketState::Finish => SocketState::Finish,
