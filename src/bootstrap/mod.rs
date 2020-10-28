@@ -4,7 +4,9 @@ use super::{
     read_message_state::ReadMessageState,
 };
 
-mod genesis;
+pub type ChainId = [u8; 4];
+
+pub mod genesis;
 
 mod state;
 pub use self::state::BootstrapState;

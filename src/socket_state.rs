@@ -4,7 +4,7 @@ use tezos_messages::p2p::encoding::ack::AckMessage;
 use slog::Logger;
 use super::{
     error::SocketError, handshake_state::HandshakeState,
-    bootstrap::BootstrapState,
+    bootstrap::{BootstrapState, genesis},
 };
 
 /// The state of peer communication
@@ -40,7 +40,8 @@ impl SocketState {
                         match ack {
                             AckMessage::Ack => {
                                 slog::info!(logger, "ready to bootstrap");
-                                SocketState::BootstrapState(stream, BootstrapState::new(decipher))
+                                let bootstrap = BootstrapState::new(decipher, genesis::CHAIN_ID);
+                                SocketState::BootstrapState(stream, bootstrap)
                             },
                             AckMessage::Nack(info) => {
                                 slog::debug!(logger, "{:?}", info);
@@ -52,10 +53,9 @@ impl SocketState {
                     incomplete => SocketState::Handshake(stream, incomplete),
                 }
             },
-            // TODO:
-            SocketState::BootstrapState(mut stream, mut bootstrap) => {
+            SocketState::BootstrapState(mut stream, bootstrap) => {
                 bootstrap.run(logger, &mut stream).await?;
-                SocketState::BootstrapState(stream, bootstrap)
+                SocketState::Finish
             },
             SocketState::Finish => SocketState::Finish,
             SocketState::Awaiting => SocketState::Awaiting,
