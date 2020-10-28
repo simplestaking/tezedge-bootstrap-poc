@@ -1,114 +1,136 @@
-use std::{mem, convert::TryInto};
+use std::{mem, convert::TryFrom};
 use tezos_messages::p2p::encoding::{
-    peer::{PeerMessageResponse, PeerMessage},
+    peer::PeerMessageResponse,
     current_branch::{CurrentBranchMessage, CurrentBranch, GetCurrentBranchMessage},
 };
-use slog::Logger;
-use super::{SocketError, TrustedConnection, ChainId, genesis};
+use super::{SocketError, TrustedConnection, ChainId, genesis, message::{Request, Response}};
 
 /// Reference to shared chain state
 pub struct BootstrapState {
-    inner: InnerState,
+    state: FullState,
     connection: TrustedConnection<PeerMessageResponse>,
 }
 
-enum InnerState {
+enum FullState {
     Initial(ChainId),
     // -> GetCurrentBranch
-    // <- GetCurrentBranch
-    ExchangedCurrentBranchRequest(ChainId),
-    // -> CurrentBranch
+    AskedRemoteBranch(ChainId),
     // <- CurrentBranch
-    ExchangedCurrentBranchResponse(SyncBlockHeaders),
+    ReceivedRemoteBranch(SyncBlockHeaders),
     // -> GetBlockHeaders
     // <- BlockHeader
+    // next state is again `ReceivedRemoteBranch` or `FullState::Finish`
+    // TODO: result of bootstrap
     Finish,
-
-    // if peer request CurrentBranch with unknown chain id
+    // if peer requested CurrentBranch with unknown chain id
     UnknownChain,
-
     Awaiting,
 }
 
 impl BootstrapState {
     pub fn new(connection: TrustedConnection<PeerMessageResponse>, chain_id: ChainId) -> Self {
         BootstrapState {
-            inner: InnerState::Initial(chain_id),
+            state: FullState::Initial(chain_id),
             connection: connection,
         }
     }
 
-    pub async fn run(self, logger: &Logger) -> Result<(), SocketError> {
+    pub async fn run(self) -> Result<(), SocketError> {
         let mut s = self;
         loop {
-            let current_state = mem::replace(&mut s.inner, InnerState::Awaiting);
+            let current_state = mem::replace(&mut s.state, FullState::Awaiting);
             match current_state {
-                InnerState::Finish => break Ok(()),
-                InnerState::UnknownChain => break Ok(()),
+                FullState::Finish => break Ok(()),
+                FullState::UnknownChain => break Ok(()),
                 current_state => {
-                    let _ = mem::replace(&mut s.inner, current_state);
-                    s.run_inner(logger).await?;
+                    let _ = mem::replace(&mut s.state, current_state);
+                    s.run_inner().await?;
                 },
             }
         }
     }
 
-    async fn run_inner(&mut self, _logger: &Logger) -> Result<(), SocketError> {
-        let current_state = mem::replace(&mut self.inner, InnerState::Awaiting);
+    async fn run_inner(&mut self) -> Result<(), SocketError> {
+        let current_state = mem::replace(&mut self.state, FullState::Awaiting);
         let new_state = match current_state {
-            InnerState::Initial(chain_id) => {
-                let peer_chain_id = self.exchange_request(&chain_id).await?;
-                if peer_chain_id == chain_id {
-                    InnerState::ExchangedCurrentBranchRequest(chain_id)
-                } else {
-                    InnerState::UnknownChain
+            FullState::Initial(chain_id) => {
+                // ask remote branch
+                let request = GetCurrentBranchMessage::new(chain_id.to_vec());
+                self.connection.write(&request.into()).await?;
+                FullState::AskedRemoteBranch(chain_id)
+            },
+            FullState::AskedRemoteBranch(chain_id) => {
+                let message = self.connection.read().await?;
+                let to_write = self.handle_peer_request(&message, chain_id);
+                if !to_write.is_empty() {
+                    self.connection.write_batch(to_write.as_ref()).await?;
+                }
+                match self.handle_peer_response(&message, chain_id) {
+                    None => FullState::AskedRemoteBranch(chain_id),
+                    Some(None) => FullState::UnknownChain,
+                    Some(Some(peer_current_branch)) => {
+                        FullState::ReceivedRemoteBranch(SyncBlockHeaders {
+                            chain_id: chain_id,
+                            remote_branch: peer_current_branch,
+                        })
+                    },
                 }
             },
-            InnerState::ExchangedCurrentBranchRequest(chain_id) => {
-                let peer_current_branch = self.exchange_response(&chain_id).await?;
-                InnerState::ExchangedCurrentBranchResponse(SyncBlockHeaders {
-                    chain_id: chain_id,
-                    remote_branch: peer_current_branch,
-                })
-            },
-            InnerState::ExchangedCurrentBranchResponse(mut s) => {
+            FullState::ReceivedRemoteBranch(mut s) => {
                 s.run().await?;
-                InnerState::Finish
+                FullState::Finish
             },
-            InnerState::Finish => InnerState::Finish,
-            InnerState::UnknownChain => InnerState::UnknownChain,
-            InnerState::Awaiting => InnerState::Awaiting,
+            FullState::Finish => FullState::Finish,
+            FullState::UnknownChain => FullState::UnknownChain,
+            FullState::Awaiting => FullState::Awaiting,
         };
-        self.inner = new_state;
+        self.state = new_state;
 
         Ok(())
     }
 
-    async fn exchange_request(&mut self, chain_id: &ChainId) -> Result<ChainId, SocketError> {
-        let request = GetCurrentBranchMessage::new(chain_id.to_vec());
-        self.connection.write([request.into()].as_ref()).await?;
-        let request = self.connection.read().await?;
-        assert_eq!(request.messages().len(), 1);
-        match &request.messages()[0] {
-            &PeerMessage::GetCurrentBranch(ref m) => Ok(m.chain_id.clone().try_into().unwrap()),
-            _ => panic!(),
+    fn handle_peer_response(
+        &mut self,
+        message: &PeerMessageResponse,
+        chain_id: ChainId,
+    ) -> Option<Option<CurrentBranch>> {
+        for response in Response::filter(&message) {
+            match response {
+                Response::CurrentBranch(m) => {
+                    if ChainId::try_from(m.chain_id().clone()).unwrap() == chain_id {
+                        return Some(Some(m.current_branch().clone()));
+                    } else {
+                        return Some(None);
+                    }
+                },
+                _ => (),
+            }
         }
+
+        None
     }
 
-    async fn exchange_response(
+    fn handle_peer_request(
         &mut self,
-        chain_id: &ChainId,
-    ) -> Result<CurrentBranch, SocketError> {
-        let genesis_block_header = genesis::block_header();
-        let current_branch = CurrentBranch::new(genesis_block_header, Vec::new());
-        let response = CurrentBranchMessage::new(chain_id.to_vec(), current_branch);
-        self.connection.write([response.into()].as_ref()).await?;
-        let response = self.connection.read().await?;
-        assert_eq!(response.messages().len(), 1);
-        match &response.messages()[0] {
-            &PeerMessage::CurrentBranch(ref m) => Ok(m.current_branch().clone()),
-            _ => panic!(),
+        message: &PeerMessageResponse,
+        chain_id: ChainId,
+    ) -> Vec<PeerMessageResponse> {
+        let mut write = Vec::new();
+        for request in Request::filter(message) {
+            match request {
+                Request::GetCurrentBranch(m) => {
+                    if ChainId::try_from(m.chain_id.clone()).unwrap() == chain_id {
+                        let genesis_block_header = genesis::block_header();
+                        let current_branch = CurrentBranch::new(genesis_block_header, Vec::new());
+                        let response = CurrentBranchMessage::new(chain_id.to_vec(), current_branch);
+                        write.push(response.into())
+                    }
+                },
+                // ignore
+                _ => (),
+            }
         }
+        write
     }
 }
 

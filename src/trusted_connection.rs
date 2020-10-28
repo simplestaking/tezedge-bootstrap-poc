@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, slice};
 use tokio::net::TcpStream;
 use slog::Logger;
 use tezos_messages::p2p::binary_message::BinaryMessage;
@@ -50,7 +50,17 @@ where
         reader.read_message(logger, stream, decipher).await
     }
 
-    pub async fn write(&mut self, messages: &[M]) -> Result<(), SocketError> {
+    // TODO:
+    #[allow(dead_code)]
+    pub async fn read_batch(&mut self) -> Result<Vec<M>, SocketError> {
+        unimplemented!()
+    }
+
+    pub async fn write(&mut self, message: &M) -> Result<(), SocketError> {
+        self.write_batch(slice::from_ref(message)).await
+    }
+
+    pub async fn write_batch(&mut self, messages: &[M]) -> Result<(), SocketError> {
         let &mut TrustedConnection {
             reader: _,
             ref mut decipher,
