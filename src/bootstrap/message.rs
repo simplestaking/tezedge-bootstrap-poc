@@ -1,5 +1,6 @@
 use tezos_messages::p2p::encoding::prelude::*;
 
+#[derive(Debug)]
 pub enum Request<'a> {
     GetCurrentBranch(&'a GetCurrentBranchMessage),
     GetCurrentHead(&'a GetCurrentHeadMessage),
@@ -25,6 +26,7 @@ impl<'a> Request<'a> {
     }
 }
 
+#[derive(Debug)]
 pub enum Response<'a> {
     CurrentBranch(&'a CurrentBranchMessage),
     CurrentHead(&'a CurrentHeadMessage),

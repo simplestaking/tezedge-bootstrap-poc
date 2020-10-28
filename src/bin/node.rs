@@ -1,9 +1,15 @@
 use slog::{Logger, Drain, Level};
+use logging::file::FileAppenderBuilder;
 use tezedge_bootstrap_poc::Socket;
 
 fn create_logger() -> Logger {
+    let appender = FileAppenderBuilder::new("target/_.log")
+        .rotate_size(10_485_760) // 10 MB
+        .rotate_keep(4)
+        .rotate_compress(true)
+        .build();
     let drain = slog_async::Async::new(
-        slog_term::FullFormat::new(slog_term::TermDecorator::new().build())
+        slog_term::FullFormat::new(slog_term::PlainDecorator::new(appender))
             .build()
             .fuse(),
     )

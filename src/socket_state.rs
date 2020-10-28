@@ -57,7 +57,7 @@ impl SocketState {
                 }
             },
             SocketState::BootstrapState(bootstrap) => {
-                bootstrap.run().await?;
+                bootstrap.run(logger).await?;
                 SocketState::Finish
             },
             SocketState::Finish => SocketState::Finish,
