@@ -1,15 +1,19 @@
 use std::{mem, convert::TryFrom};
 use slog::Logger;
 use tezos_messages::p2p::{
-    binary_message::BinaryMessage,
     encoding::{
         peer::PeerMessageResponse,
         current_branch::{CurrentBranchMessage, CurrentBranch, GetCurrentBranchMessage},
-        block_header::{BlockHeader, GetBlockHeadersMessage},
     },
 };
-use crypto::{blake2b, hash::Hash};
-use super::{SocketError, TrustedConnection, ChainId, genesis, message::{Request, Response}};
+use super::{
+    SocketError,
+    TrustedConnection,
+    ChainId,
+    genesis,
+    message::{Request, Response},
+    sync_block_headers::SyncBlockHeaders,
+};
 
 /// Reference to shared chain state
 pub struct BootstrapState {
@@ -75,10 +79,8 @@ impl BootstrapState {
                     None => FullState::AskedRemoteBranch(chain_id),
                     Some(None) => FullState::UnknownChain,
                     Some(Some(peer_current_branch)) => {
-                        FullState::ReceivedRemoteBranch(SyncBlockHeaders {
-                            chain_id: chain_id,
-                            remote_branch: peer_current_branch,
-                        })
+                        let synchronizer = SyncBlockHeaders::new(peer_current_branch);
+                        FullState::ReceivedRemoteBranch(synchronizer)
                     },
                 }
             },
@@ -138,54 +140,5 @@ impl BootstrapState {
             }
         }
         write
-    }
-}
-
-#[allow(dead_code)]
-struct SyncBlockHeaders {
-    chain_id: ChainId,
-    remote_branch: CurrentBranch,
-}
-
-#[derive(Debug)]
-enum MissingBlock {
-    Level {
-        hash: Hash,
-        level: i32,
-    },
-    LevelGuess {
-        hash: Hash,
-        level: i32,
-    },
-}
-
-impl SyncBlockHeaders {
-    pub async fn run(
-        &mut self,
-        connection: &mut TrustedConnection<PeerMessageResponse>,
-        logger: &Logger,
-    ) -> Result<(), SocketError> {
-        // TODO:
-        let head: &BlockHeader = self.remote_branch.current_head();
-        let missing_blocks = vec![
-            MissingBlock::Level {
-                hash: blake2b::digest_256(head.as_bytes().unwrap().as_ref()),
-                level: head.level(),
-            },
-            MissingBlock::LevelGuess {
-                hash: head.predecessor().clone(),
-                level: head.level() - 1,
-            },
-        ];
-        slog::info!(logger, "missing blocks: {:x?}", missing_blocks);
-        let hashes = missing_blocks.into_iter().map(|b| match b {
-            MissingBlock::Level { hash, .. } => hash,
-            MissingBlock::LevelGuess { hash, .. } => hash,
-        }).collect();
-        let request = GetBlockHeadersMessage::new(hashes);
-        connection.write(&request.into()).await?;
-        loop {
-            connection.read().await?;
-        }
     }
 }
