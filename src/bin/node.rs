@@ -5,9 +5,7 @@ use tezedge_bootstrap_poc::Socket;
 fn create_logger() -> Logger {
     let _ = std::fs::remove_file("target/_.log");
     let appender = FileAppenderBuilder::new("target/_.log")
-        .rotate_size(10_485_760) // 10 MB
-        .rotate_keep(4)
-        .rotate_compress(true)
+        .rotate_size(0x10000000) // 256 MB
         .build();
     let format = slog_term::FullFormat::new(slog_term::PlainDecorator::new(appender))
         .build()

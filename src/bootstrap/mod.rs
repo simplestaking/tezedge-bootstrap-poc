@@ -7,6 +7,7 @@ pub mod genesis;
 mod message;
 
 mod sync_block_headers;
+#[allow(warnings)]
 mod blockchain;
 
 mod state;
